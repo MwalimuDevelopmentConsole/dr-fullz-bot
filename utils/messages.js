@@ -1,6 +1,6 @@
 // utils/messages.js
 const welcome = (name) => `
-🎉 Welcome to ShopBot, ${name}!
+🎉 Welcome to Dr Fullz, ${name}!
 
 Your one-stop shop for digital products. Choose an option below to get started:
 
@@ -10,7 +10,7 @@ Your one-stop shop for digital products. Choose an option below to get started:
 `;
 
 const help = `
-🤖 **ShopBot Help**
+🤖 **Dr Fullz Help**
 
 **Commands:**
 /start - Start the bot

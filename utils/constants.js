@@ -1,7 +1,7 @@
 // utils/constants.js
 module.exports = {
     // Bot settings
-    BOT_NAME: 'ShopBot',
+    BOT_NAME: 'Dr Fullz',
     VERSION: '1.0.0',
     
     // Pagination

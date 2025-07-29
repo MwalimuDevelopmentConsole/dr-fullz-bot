@@ -1,4 +1,4 @@
-// utils/keyboards.js - Updated with custom amount support
+// utils/keyboards.js - Updated with Help/Support button
 
 // Add at the top after the requires
 function validateAndFixKeyboard(keyboard, keyboardName = 'Unknown') {
@@ -28,13 +28,26 @@ function validateAndFixKeyboard(keyboard, keyboardName = 'Unknown') {
     return keyboard;
 }
 
+// Updated main menu with Help button
 const mainMenu = {
     reply_markup: {
         inline_keyboard: [
-            [{ text: '👤 Profile', callback_data: 'profile' }],
             [{ text: '💰 Wallet', callback_data: 'wallet' }],
             [{ text: '🛍️ Shop', callback_data: 'shop' }],
-            [{ text: '💳 Deposit', callback_data: 'deposit' }]
+            [{ text: '💳 Deposit', callback_data: 'deposit' }],
+            [{ text: '❓ Help & Support', callback_data: 'help_support' }]
+        ]
+    }
+};
+
+// Help menu with support options
+const helpMenu = {
+    reply_markup: {
+        inline_keyboard: [
+            [{ text: '📖 How It Works', callback_data: 'how_it_works' }],
+            [{ text: '💬 Contact Support', url: process.env.SUPPORT_CONTACT || 'https://t.me/petergach' }],
+            [{ text: '📢 Join Channel', url: process.env.CHANNEL_LINK || 'https://t.me/channel' }],
+            [{ text: '⬅️ Back to Main', callback_data: 'main_menu' }]
         ]
     }
 };
@@ -356,6 +369,14 @@ const backToShop = {
     }
 };
 
+const backToHelp = {
+    reply_markup: {
+        inline_keyboard: [
+            [{ text: '⬅️ Back to Help', callback_data: 'help_support' }]
+        ]
+    }
+};
+
 // Create product list from API data
 function createProductList(products) {
     if (!products || products.length === 0) {
@@ -384,11 +405,13 @@ function createProductList(products) {
 
 module.exports = {
     mainMenu,
+    helpMenu,
     shopMenu,
     depositMenu,
     yearFilter,
     backToMain,
     backToShop,
+    backToHelp,
     createProductList,
     createCryptoKeyboard,
     createAmountKeyboard,

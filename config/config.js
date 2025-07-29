@@ -3,7 +3,7 @@ const config = {
     BOT_TOKEN: process.env.BOT_TOKEN,
     API_BASE_URL: process.env.API_BASE_URL || 'http://localhost:3000/api',
     API_TIMEOUT: 10000,
-    BOT_NAME: 'ShopBot',
+    BOT_NAME: 'Dr Fullz',
     WEBHOOK_URL: process.env.WEBHOOK_URL || null
 };
 

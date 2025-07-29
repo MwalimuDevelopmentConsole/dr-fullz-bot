@@ -1,4 +1,4 @@
-// handlers/commands.js - Simple version
+// handlers/commands.js - Updated with new help system
 const keyboards = require('../utils/keyboards');
 const userService = require('../services/userService');
 const paymentService = require('../services/paymentService');
@@ -29,7 +29,7 @@ module.exports = (bot) => {
                 return;
             }
 
-            const welcomeText = `🎉 Welcome to ShopBot, ${firstName}!\n\n👤 Account: @${username}\n✅ Connected to your account\n\nChoose an option below:`;
+            const welcomeText = `🎉 Welcome to Dr Fullz, ${firstName}!\n\n👤 Account: @${username}\n✅ Connected to your account\n\nChoose an option below:`;
             await bot.sendMessage(chatId, welcomeText, keyboards.mainMenu);
             
         } catch (error) {
@@ -133,12 +133,20 @@ module.exports = (bot) => {
             await bot.sendMessage(chatId, '❌ Something went wrong. Please try again later.');
         }
     });
+
+    // /help command - redirect to help menu
     bot.onText(/\/help/, async (msg) => {
         const chatId = msg.chat.id;
-        const helpText = `🤖 **ShopBot Help**\n\n**Commands:**\n• /start - Start the bot\n• /wallet - Check your wallet balance\n• /help - Show this help\n\n**Features:**\n• Browse products in the shop\n• Check your profile\n• Make deposits\n• View transaction history`;
+        const supportContact = process.env.SUPPORT_CONTACT || 'https://t.me/dfgddf';
+        const channelLink = process.env.CHANNEL_LINK || 'https://t.me/channel';
+        
+        const helpText = `❓ **Help & Support**\n\n🤖 **Welcome to Dr Fullz!**\n\nOur bot provides secure access to high-quality fuulz with cryptocurrency payments.\n\n**Quick Start:**\n• Use /wallet to check your balance\n• Use /deposit to add funds\n• Browse 🛍️ Shop for products\n• Get instant downloads after purchase\n\n**Need Help?**\n• Contact our support team\n• Join our channel for updates\n• Check "How It Works" for details`;
         
         try {
-            await bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, helpText, {
+                parse_mode: 'Markdown',
+                ...keyboards.helpMenu
+            });
         } catch (error) {
             console.error('Help command error:', error);
         }
