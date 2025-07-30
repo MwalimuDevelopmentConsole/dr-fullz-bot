@@ -1,5 +1,7 @@
-// utils/sharedState.js - Improved shared state for user sessions with better error handling
+// utils/sharedState.js - Enhanced shared state for user sessions with automatic cleanup
 const userStates = {};
+const stateTimestamps = {};
+const STATE_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
 function setUserState(userId, state) {
   try {
@@ -9,8 +11,10 @@ function setUserState(userId, state) {
     }
 
     userStates[userId] = state;
+    stateTimestamps[userId] = Date.now();
+    
     console.log(`✅ Set user state for ${userId}:`, state);
-    console.log("📊 All user states:", Object.keys(userStates));
+    console.log(`📊 Total active states: ${Object.keys(userStates).length}`);
     return true;
   } catch (error) {
     console.error("Error in setUserState:", error);
@@ -22,6 +26,14 @@ function getUserState(userId) {
   try {
     if (!userId) {
       console.error("getUserState: userId is required");
+      return null;
+    }
+
+    // Check if state is expired
+    const timestamp = stateTimestamps[userId];
+    if (timestamp && (Date.now() - timestamp) > STATE_TIMEOUT) {
+      console.log(`⏰ State expired for user ${userId}, clearing...`);
+      clearUserState(userId);
       return null;
     }
 
@@ -42,8 +54,9 @@ function clearUserState(userId) {
     }
 
     delete userStates[userId];
+    delete stateTimestamps[userId];
     console.log(`🗑️ Cleared user state for ${userId}`);
-    console.log("📊 Remaining states:", Object.keys(userStates));
+    console.log(`📊 Remaining states: ${Object.keys(userStates).length}`);
     return true;
   } catch (error) {
     console.error("Error in clearUserState:", error);
@@ -61,7 +74,7 @@ function getAllStates() {
   }
 }
 
-// Additional utility functions for better debugging
+// Update existing state with new data
 function updateUserState(userId, updates) {
   try {
     if (!userId) {
@@ -78,15 +91,21 @@ function updateUserState(userId, updates) {
   }
 }
 
+// Check if user has active state
 function hasUserState(userId) {
   try {
-    return userId && userStates.hasOwnProperty(userId);
+    if (!userId) return false;
+    
+    // Check if exists and not expired
+    const state = getUserState(userId);
+    return state !== null;
   } catch (error) {
     console.error("Error in hasUserState:", error);
     return false;
   }
 }
 
+// Get number of active users
 function getActiveUserCount() {
   try {
     return Object.keys(userStates).length;
@@ -96,14 +115,119 @@ function getActiveUserCount() {
   }
 }
 
+// Get state age in minutes
+function getStateAge(userId) {
+  try {
+    const timestamp = stateTimestamps[userId];
+    if (!timestamp) return null;
+    
+    return Math.round((Date.now() - timestamp) / (1000 * 60));
+  } catch (error) {
+    console.error("Error in getStateAge:", error);
+    return null;
+  }
+}
+
+// Clean up expired states
+function cleanupExpiredStates() {
+  const now = Date.now();
+  let cleaned = 0;
+  
+  try {
+    for (const [userId, timestamp] of Object.entries(stateTimestamps)) {
+      if ((now - timestamp) > STATE_TIMEOUT) {
+        clearUserState(userId);
+        cleaned++;
+      }
+    }
+    
+    if (cleaned > 0) {
+      console.log(`🧹 Cleaned up ${cleaned} expired user states`);
+    }
+    
+    return cleaned;
+  } catch (error) {
+    console.error("Error in cleanupExpiredStates:", error);
+    return 0;
+  }
+}
+
+// Force cleanup all states (admin function)
+function clearAllStates() {
+  try {
+    const count = Object.keys(userStates).length;
+    Object.keys(userStates).forEach(userId => clearUserState(userId));
+    console.log(`🗑️ Cleared all ${count} user states`);
+    return count;
+  } catch (error) {
+    console.error("Error in clearAllStates:", error);
+    return 0;
+  }
+}
+
+// Get detailed statistics
+function getStats() {
+  try {
+    const now = Date.now();
+    const ages = Object.values(stateTimestamps).map(timestamp => 
+      Math.round((now - timestamp) / (1000 * 60))
+    );
+    
+    return {
+      totalStates: Object.keys(userStates).length,
+      averageAge: ages.length > 0 ? Math.round(ages.reduce((a, b) => a + b, 0) / ages.length) : 0,
+      oldestAge: ages.length > 0 ? Math.max(...ages) : 0,
+      newestAge: ages.length > 0 ? Math.min(...ages) : 0,
+      memoryUsage: process.memoryUsage(),
+      stateDetails: Object.keys(userStates).map(userId => ({
+        userId,
+        step: userStates[userId]?.step,
+        age: getStateAge(userId)
+      }))
+    };
+  } catch (error) {
+    console.error("Error in getStats:", error);
+    return { error: error.message };
+  }
+}
+
 // Debug function to check module health
 function debugModule() {
   console.log("🔧 SharedState Module Debug Info:");
   console.log("- Module loaded successfully");
-  console.log("- Active users:", getActiveUserCount());
-  console.log("- All states:", userStates);
+  console.log("- Stats:", getStats());
   console.log("- Available functions:", Object.keys(module.exports));
 }
+
+// Auto cleanup every 10 minutes
+const cleanupInterval = setInterval(cleanupExpiredStates, 10 * 60 * 1000);
+
+// Log stats every 15 minutes in development
+if (process.env.NODE_ENV !== 'production') {
+  setInterval(() => {
+    const stats = getStats();
+    if (stats.totalStates > 0) {
+      console.log('📊 SharedState Stats:', {
+        totalStates: stats.totalStates,
+        averageAge: stats.averageAge,
+        oldestAge: stats.oldestAge
+      });
+    }
+  }, 15 * 60 * 1000);
+}
+
+// Graceful cleanup on exit
+process.on('SIGINT', () => {
+  console.log('🛑 Cleaning up shared states before exit...');
+  clearInterval(cleanupInterval);
+  clearAllStates();
+});
+
+process.on('SIGTERM', () => {
+  console.log('🛑 Cleaning up shared states before exit...');
+  clearInterval(cleanupInterval);
+  clearAllStates();
+});
 
 // Test the module on load
 console.log("📦 SharedState module loaded successfully");
@@ -128,6 +252,10 @@ module.exports = {
   updateUserState,
   hasUserState,
   getActiveUserCount,
+  getStateAge,
+  cleanupExpiredStates,
+  clearAllStates,
+  getStats,
   debugModule,
 };
 

@@ -1,5 +1,7 @@
-// handlers/callbacks.js - Complete version with Help & Support system
+// handlers/callbacks.js - Complete version with safe message editing and error recovery
 const keyboards = require("../utils/keyboards");
+const messageHandler = require("../utils/messageHandler");
+const rateLimiter = require("../utils/rateLimiter");
 const userService = require("../services/userService");
 const paymentService = require("../services/paymentService");
 const shopService = require("../services/shopService");
@@ -11,31 +13,40 @@ module.exports = (bot) => {
     const messageId = query.message.message_id;
     const data = query.data;
     const username = query.from.username;
+    const userId = query.from.id;
+
+    // Rate limiting check
+    if (rateLimiter.isCallbackRateLimited(userId, 20, 60000)) {
+      await messageHandler.safeAnswerCallback(bot, query.id, "⚠️ Please slow down and try again in a minute");
+      return;
+    }
+
+    // Prevent duplicate processing of the same callback
+    const callbackKey = `${userId}_${data}_${messageId}`;
+    if (messageHandler.pendingEdits.has(callbackKey)) {
+      console.log(`⏳ Callback already processing: ${callbackKey}`);
+      await messageHandler.safeAnswerCallback(bot, query.id);
+      return;
+    }
+
+    messageHandler.pendingEdits.add(callbackKey);
 
     try {
+      // Answer callback query first to prevent timeout
+      await messageHandler.safeAnswerCallback(bot, query.id);
+
       switch (data) {
         case "main_menu":
-          await bot.editMessageText(
-            "🏠 Main Menu\n\nWhat would you like to do?",
-            {
-              chat_id: chatId,
-              message_id: messageId,
-              ...keyboards.mainMenu,
-            }
-          );
+          await messageHandler.goToMainMenu(bot, chatId, messageId);
           break;
 
         case "help_support":
-          const supportContact =
-            process.env.SUPPORT_CONTACT || "https://t.me/petergach";
-          const channelLink =
-            process.env.CHANNEL_LINK || "https://t.me/channel";
+          const supportContact = process.env.SUPPORT_CONTACT || "https://t.me/petergach";
+          const channelLink = process.env.CHANNEL_LINK || "https://t.me/channel";
 
           const helpText = `❓ **Help & Support**\n\n🤖 **Welcome to Dr Fullz!**\n\nOur bot provides secure access to high-quality fullz with cryptocurrency payments.\n\n**Quick Start:**\n• Use /wallet to check your balance\n• Use /deposit to add funds\n• Browse 🛍️ Shop for products\n• Get instant downloads after purchase\n\n**Need Help?**\n• Contact our support team\n• Join our channel for updates\n• Check "How It Works" for details`;
 
-          await bot.editMessageText(helpText, {
-            chat_id: chatId,
-            message_id: messageId,
+          await messageHandler.safeEditMessage(bot, chatId, messageId, helpText, {
             parse_mode: "Markdown",
             ...keyboards.helpMenu,
           });
@@ -44,9 +55,7 @@ module.exports = (bot) => {
         case "how_it_works":
           const howItWorksText = `📖 **How Dr Fullz Works**\n\n**🔸 Step 1: Add Funds**\n• Click 💳 Deposit to add cryptocurrency\n• Choose from Bitcoin, Ethereum, USDT, etc.\n• Funds are credited automatically\n\n**🔸 Step 2: Browse Products**\n• Visit 🛍️ Shop to see categories\n• Filter by year range and US states\n• See available quantities in real-time\n\n**🔸 Step 3: Purchase & Download**\n• Select quantity and confirm purchase\n• Instant download link provided\n• Files are ready immediately\n\n**🔸 Security & Privacy**\n• All payments use secure crypto networks\n• No personal banking information required\n• Anonymous transactions supported\n\n**🔸 Support Available 24/7**\n• Contact support for any issues\n• Join our channel for announcements\n• Fast response times guaranteed\n\n💡 **Pro Tip:** Check your wallet balance before shopping to ensure sufficient funds!`;
 
-          await bot.editMessageText(howItWorksText, {
-            chat_id: chatId,
-            message_id: messageId,
+          await messageHandler.safeEditMessage(bot, chatId, messageId, howItWorksText, {
             parse_mode: "Markdown",
             ...keyboards.backToHelp,
           });
@@ -54,168 +63,141 @@ module.exports = (bot) => {
 
         case "wallet":
           if (!username) {
-            await bot.editMessageText(
-              "❌ Please create a Telegram username first!",
-              {
-                chat_id: chatId,
-                message_id: messageId,
-                ...keyboards.backToMain,
-              }
+            await messageHandler.showError(
+              bot, chatId, messageId,
+              "❌ Please create a Telegram username first!"
             );
             break;
           }
 
-          const walletResult = await userService.getUserWallet(username);
+          await messageHandler.showLoading(bot, chatId, messageId, "⏳ Loading wallet...");
 
-          if (!walletResult.success) {
-            await bot.editMessageText(
-              `❌ Unable to get wallet information.\n\nError: ${walletResult.error}`,
-              {
-                chat_id: chatId,
-                message_id: messageId,
-                ...keyboards.backToMain,
-              }
-            );
-            break;
-          }
+          try {
+            const walletResult = await userService.getUserWallet(username);
 
-          let transactionText = "";
-          if (
-            walletResult.transactions &&
-            walletResult.transactions.length > 0
-          ) {
-            transactionText = "\n\n📊 **Recent Transactions:**\n";
-            walletResult.transactions.slice(0, 5).forEach((tx, index) => {
-              const date = new Date(tx.createdAt).toLocaleDateString();
-              const statusEmoji =
-                tx.status === "waiting"
-                  ? "⏳"
-                  : tx.status === "completed"
-                  ? "✅"
-                  : "❌";
-              transactionText += `${index + 1}. ${statusEmoji} ${
-                tx.priceAmount
-              } ${tx.payCurrency.toUpperCase()} - ${date}\n`;
-            });
-
-            if (walletResult.transactions.length > 5) {
-              transactionText += `\n... and ${
-                walletResult.transactions.length - 5
-              } more`;
+            if (!walletResult.success) {
+              await messageHandler.showError(
+                bot, chatId, messageId,
+                `❌ Unable to get wallet information.\n\nError: ${walletResult.error}`
+              );
+              break;
             }
-          } else {
-            transactionText = "\n\n📊 No transactions yet";
+
+            let transactionText = "";
+            if (walletResult.transactions && walletResult.transactions.length > 0) {
+              transactionText = "\n\n📊 **Recent Transactions:**\n";
+              walletResult.transactions.slice(0, 5).forEach((tx, index) => {
+                const date = new Date(tx.createdAt).toLocaleDateString();
+                const statusEmoji = tx.status === "waiting" ? "⏳" : tx.status === "completed" ? "✅" : "❌";
+                transactionText += `${index + 1}. ${statusEmoji} ${tx.priceAmount} ${tx.payCurrency.toUpperCase()} - ${date}\n`;
+              });
+
+              if (walletResult.transactions.length > 5) {
+                transactionText += `\n... and ${walletResult.transactions.length - 5} more`;
+              }
+            } else {
+              transactionText = "\n\n📊 No transactions yet";
+            }
+
+            const walletText = `💰 **Your Wallet**\n\n💵 **Balance:** ${walletResult.balance}${transactionText}`;
+
+            await messageHandler.safeEditMessage(bot, chatId, messageId, walletText, {
+              parse_mode: "Markdown",
+              ...keyboards.backToMain,
+            });
+          } catch (error) {
+            console.error("Wallet error:", error);
+            await messageHandler.showError(
+              bot, chatId, messageId,
+              "❌ Something went wrong loading your wallet. Please try again."
+            );
           }
-
-          const walletText = `💰 **Your Wallet**\n\n💵 **Balance:** ${walletResult.balance}${transactionText}`;
-
-          await bot.editMessageText(walletText, {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: "Markdown",
-            ...keyboards.backToMain,
-          });
           break;
 
         case "shop":
           if (!username) {
-            await bot.editMessageText(
-              "❌ Please create a Telegram username first!",
-              {
-                chat_id: chatId,
-                message_id: messageId,
-                ...keyboards.backToMain,
-              }
+            await messageHandler.showError(
+              bot, chatId, messageId,
+              "❌ Please create a Telegram username first!"
             );
             break;
           }
 
-          await bot.editMessageText("⏳ Loading shop categories...", {
-            chat_id: chatId,
-            message_id: messageId,
-          });
+          await messageHandler.showLoading(bot, chatId, messageId, "⏳ Loading shop categories...");
 
-          const categoriesResult = await shopService.getCategories();
+          try {
+            const categoriesResult = await shopService.getCategories();
 
-          if (!categoriesResult.success) {
-            await bot.editMessageText(
-              `❌ **Unable to load shop categories**\n\nError: ${categoriesResult.error}`,
-              {
-                chat_id: chatId,
-                message_id: messageId,
-                parse_mode: "Markdown",
-                ...keyboards.backToMain,
-              }
+            if (!categoriesResult.success) {
+              await messageHandler.showError(
+                bot, chatId, messageId,
+                `❌ **Unable to load shop categories**\n\nError: ${categoriesResult.error}`,
+                'main_menu'
+              );
+              break;
+            }
+
+            const categoriesKeyboard = keyboards.validateAndFixKeyboard(
+              keyboards.createCategoriesKeyboard(categoriesResult.categories),
+              "CategoriesKeyboard"
             );
-            break;
-          }
 
-          const categoriesKeyboard = keyboards.validateAndFixKeyboard(
-            keyboards.createCategoriesKeyboard(categoriesResult.categories),
-            "CategoriesKeyboard"
-          );
-
-          await bot.editMessageText(
-            "🛍️ **Shop Categories**\n\nSelect a category (base and price):",
-            {
-              chat_id: chatId,
-              message_id: messageId,
+            await messageHandler.safeEditMessage(bot, chatId, messageId,
+              "🛍️ **Shop Categories**\n\nSelect a category (base and price):", {
               parse_mode: "Markdown",
               ...categoriesKeyboard,
-            }
-          );
+            });
+          } catch (error) {
+            console.error("Shop error:", error);
+            await messageHandler.showError(
+              bot, chatId, messageId,
+              "❌ Something went wrong loading the shop. Please try again.",
+              'main_menu'
+            );
+          }
           break;
 
         case "deposit":
           if (!username) {
-            await bot.editMessageText(
-              "❌ Please create a Telegram username first!",
-              {
-                chat_id: chatId,
-                message_id: messageId,
-                ...keyboards.backToMain,
-              }
+            await messageHandler.showError(
+              bot, chatId, messageId,
+              "❌ Please create a Telegram username first!"
             );
             break;
           }
 
-          await bot.editMessageText(
-            "⏳ Loading available cryptocurrencies...",
-            {
-              chat_id: chatId,
-              message_id: messageId,
+          await messageHandler.showLoading(bot, chatId, messageId, "⏳ Loading available cryptocurrencies...");
+
+          try {
+            const currenciesResult = await paymentService.getCurrencies();
+
+            if (!currenciesResult.success) {
+              await messageHandler.showError(
+                bot, chatId, messageId,
+                `❌ **Unable to load cryptocurrencies**\n\nError: ${currenciesResult.error}`,
+                'main_menu'
+              );
+              break;
             }
-          );
 
-          const currenciesResult = await paymentService.getCurrencies();
-
-          if (!currenciesResult.success) {
-            await bot.editMessageText(
-              `❌ **Unable to load cryptocurrencies**\n\nError: ${currenciesResult.error}`,
-              {
-                chat_id: chatId,
-                message_id: messageId,
-                parse_mode: "Markdown",
-                ...keyboards.backToMain,
-              }
+            const cryptoKeyboard = keyboards.validateAndFixKeyboard(
+              keyboards.createCryptoKeyboard(currenciesResult.currencies),
+              "CryptoKeyboard"
             );
-            break;
-          }
 
-          const cryptoKeyboard = keyboards.validateAndFixKeyboard(
-            keyboards.createCryptoKeyboard(currenciesResult.currencies),
-            "CryptoKeyboard"
-          );
-
-          await bot.editMessageText(
-            "💳 **Deposit Funds**\n\nSelect cryptocurrency:",
-            {
-              chat_id: chatId,
-              message_id: messageId,
+            await messageHandler.safeEditMessage(bot, chatId, messageId,
+              "💳 **Deposit Funds**\n\nSelect cryptocurrency:", {
               parse_mode: "Markdown",
               ...cryptoKeyboard,
-            }
-          );
+            });
+          } catch (error) {
+            console.error("Deposit error:", error);
+            await messageHandler.showError(
+              bot, chatId, messageId,
+              "❌ Something went wrong loading deposit options. Please try again.",
+              'main_menu'
+            );
+          }
           break;
 
         default:
@@ -230,16 +212,14 @@ module.exports = (bot) => {
               "AmountKeyboard"
             );
 
-            await bot.editMessageText(
-              `💰 **Deposit with ${cryptoCode.toUpperCase()}**\n\nSelect amount:`,
-              {
-                chat_id: chatId,
-                message_id: messageId,
-                parse_mode: "Markdown",
-                ...amountKeyboard,
-              }
-            );
-          } else if (data.startsWith("amount_")) {
+            await messageHandler.safeEditMessage(bot, chatId, messageId,
+              `💰 **Deposit with ${cryptoCode.toUpperCase()}**\n\nSelect amount:`, {
+              parse_mode: "Markdown",
+              ...amountKeyboard,
+            });
+          } 
+          
+          else if (data.startsWith("amount_")) {
             const parts = data.split("_");
             const cryptoCode = parts[1];
             const amount = parts[2];
@@ -255,62 +235,62 @@ module.exports = (bot) => {
               cryptoCode
             );
           }
+          
           // Handle category selection
           else if (data.startsWith("category_")) {
             const categoryIndex = parseInt(data.split("_")[1]);
             console.log("Category index selected:", categoryIndex);
 
-            const categoriesResult = await shopService.getCategories();
+            try {
+              const categoriesResult = await shopService.getCategories();
 
-            if (
-              !categoriesResult.success ||
-              !categoriesResult.categories[categoryIndex]
-            ) {
-              await bot.editMessageText(
-                "❌ Category not found. Please try again.",
-                {
-                  chat_id: chatId,
-                  message_id: messageId,
+              if (!categoriesResult.success || !categoriesResult.categories[categoryIndex]) {
+                await messageHandler.safeEditMessage(bot, chatId, messageId,
+                  "❌ Category not found. Please try again.", {
                   reply_markup: {
                     inline_keyboard: [
                       [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
                     ],
                   },
-                }
-              );
-              break;
-            }
+                });
+                break;
+              }
 
-            const selectedCategory = categoriesResult.categories[categoryIndex];
-            const baseId = selectedCategory._id;
+              const selectedCategory = categoriesResult.categories[categoryIndex];
+              const baseId = selectedCategory._id;
 
-            console.log("Selected category:", selectedCategory);
-            console.log("Base ID:", baseId);
+              console.log("Selected category:", selectedCategory);
+              console.log("Base ID:", baseId);
 
-            sharedState.setUserState(query.from.id, {
-              step: "selecting_year",
-              baseId: baseId,
-              categoryIndex: categoryIndex,
-            });
+              sharedState.setUserState(userId, {
+                step: "selecting_year",
+                baseId: baseId,
+                categoryIndex: categoryIndex,
+              });
 
-            const yearKeyboard = keyboards.createYearRangeKeyboard(baseId);
+              const yearKeyboard = keyboards.createYearRangeKeyboard(baseId);
 
-            await bot.editMessageText(
-              `📅 **Year Range Filter**\n\nSelected: ${selectedCategory.base}\n\nSelect a year range or skip to see all products:`,
-              {
-                chat_id: chatId,
-                message_id: messageId,
+              await messageHandler.safeEditMessage(bot, chatId, messageId,
+                `📅 **Year Range Filter**\n\nSelected: ${selectedCategory.base}\n\nSelect a year range or skip to see all products:`, {
                 parse_mode: "Markdown",
                 ...yearKeyboard,
-              }
-            );
+              });
+            } catch (error) {
+              console.error("Category selection error:", error);
+              await messageHandler.showError(
+                bot, chatId, messageId,
+                "❌ Something went wrong. Please try again.",
+                'shop'
+              );
+            }
           }
+          
           // Handle year range selection
           else if (data.startsWith("year_range_")) {
             const parts = data.split("_");
             console.log("Year range callback parts:", parts);
 
-            const userState = sharedState.getUserState(query.from.id);
+            const userState = sharedState.getUserState(userId);
             if (!userState || !userState.baseId) {
               await sendSessionExpiredMessage(bot, chatId, messageId);
               break;
@@ -320,14 +300,7 @@ module.exports = (bot) => {
             const yearFrom = parts[2];
             const yearTo = parts[3];
 
-            console.log(
-              "Year range selected:",
-              yearFrom,
-              "-",
-              yearTo,
-              "for base:",
-              baseId
-            );
+            console.log("Year range selected:", yearFrom, "-", yearTo, "for base:", baseId);
 
             const filters = {
               base: baseId,
@@ -335,7 +308,7 @@ module.exports = (bot) => {
               yearTo: parseInt(yearTo),
             };
 
-            sharedState.setUserState(query.from.id, {
+            sharedState.setUserState(userId, {
               step: "selecting_state",
               baseId: baseId,
               filters: filters,
@@ -343,33 +316,27 @@ module.exports = (bot) => {
 
             const stateKeyboard = keyboards.createStateFilterKeyboard();
 
-            await bot.editMessageText(
-              `🏛️ **State Filter**\n\nSelect a US state or skip to see all products:`,
-              {
-                chat_id: chatId,
-                message_id: messageId,
-                parse_mode: "Markdown",
-                ...stateKeyboard,
-              }
-            );
+            await messageHandler.safeEditMessage(bot, chatId, messageId,
+              `🏛️ **State Filter**\n\nSelect a US state or skip to see all products:`, {
+              parse_mode: "Markdown",
+              ...stateKeyboard,
+            });
           }
+          
           // Handle skip year filter
           else if (data === "skip_year") {
-            const userState = sharedState.getUserState(query.from.id);
+            const userState = sharedState.getUserState(userId);
             if (!userState || !userState.baseId) {
               await sendSessionExpiredMessage(bot, chatId, messageId);
               break;
             }
 
             const baseId = userState.baseId;
-
             console.log("Skipping year filter for base:", baseId);
 
-            const filters = {
-              base: baseId,
-            };
+            const filters = { base: baseId };
 
-            sharedState.setUserState(query.from.id, {
+            sharedState.setUserState(userId, {
               step: "selecting_state",
               baseId: baseId,
               filters: filters,
@@ -377,22 +344,19 @@ module.exports = (bot) => {
 
             const stateKeyboard = keyboards.createStateFilterKeyboard();
 
-            await bot.editMessageText(
-              `🏛️ **State Filter**\n\nSelect a US state or skip to see all products:`,
-              {
-                chat_id: chatId,
-                message_id: messageId,
-                parse_mode: "Markdown",
-                ...stateKeyboard,
-              }
-            );
+            await messageHandler.safeEditMessage(bot, chatId, messageId,
+              `🏛️ **State Filter**\n\nSelect a US state or skip to see all products:`, {
+              parse_mode: "Markdown",
+              ...stateKeyboard,
+            });
           }
+          
           // Handle state selection
           else if (data.startsWith("state_")) {
             const selectedState = data.split("_")[1];
             console.log("State selected:", selectedState);
 
-            const userState = sharedState.getUserState(query.from.id);
+            const userState = sharedState.getUserState(userId);
             if (!userState || !userState.filters) {
               await sendSessionExpiredMessage(bot, chatId, messageId);
               break;
@@ -410,14 +374,15 @@ module.exports = (bot) => {
               messageId,
               username,
               filters,
-              query.from.id
+              userId
             );
           }
+          
           // Handle skip state filter
           else if (data === "skip_state") {
             console.log("Skipping state filter");
 
-            const userState = sharedState.getUserState(query.from.id);
+            const userState = sharedState.getUserState(userId);
             if (!userState || !userState.filters) {
               await sendSessionExpiredMessage(bot, chatId, messageId);
               break;
@@ -431,14 +396,12 @@ module.exports = (bot) => {
               messageId,
               username,
               filters,
-              query.from.id
+              userId
             );
           }
+          
           // Handle checkout confirmation
-          else if (
-            data.startsWith("confirm_checkout_") ||
-            data.startsWith("checkout_")
-          ) {
+          else if (data.startsWith("confirm_checkout_") || data.startsWith("checkout_")) {
             let quantity;
 
             if (data.startsWith("confirm_checkout_")) {
@@ -449,12 +412,9 @@ module.exports = (bot) => {
               quantity = parseInt(parts[1]);
             }
 
-            console.log(
-              "Checkout confirmation received for quantity:",
-              quantity
-            );
+            console.log("Checkout confirmation received for quantity:", quantity);
 
-            const userState = sharedState.getUserState(query.from.id);
+            const userState = sharedState.getUserState(userId);
             if (!userState || !userState.filters) {
               await sendSessionExpiredMessage(bot, chatId, messageId);
               break;
@@ -470,32 +430,47 @@ module.exports = (bot) => {
               username,
               filters,
               quantity,
-              query.from.id
+              userId
             );
-          } else {
+          } 
+          
+          else {
             console.log("Unknown callback data:", data);
-            await bot.answerCallbackQuery(query.id, "Feature coming soon!");
+            await messageHandler.safeAnswerCallback(bot, query.id, "Feature coming soon!");
           }
       }
 
-      await bot.answerCallbackQuery(query.id);
     } catch (error) {
       console.error("Callback error:", error);
-      await bot.answerCallbackQuery(query.id, "Error occurred");
-
-      await bot.editMessageText("❌ Something went wrong. Please try again.", {
-        chat_id: chatId,
-        message_id: messageId,
-        ...keyboards.mainMenu,
-      });
+      
+      // Try to show error message, fallback to main menu
+      try {
+        await messageHandler.showError(
+          bot, chatId, messageId,
+          "❌ Something went wrong. Please try again."
+        );
+      } catch (fallbackError) {
+        console.error("Fallback error:", fallbackError);
+        // Last resort - send new message
+        try {
+          await messageHandler.safeSendMessage(bot, chatId, 
+            "❌ Something went wrong. Please use /start to restart.", {
+            ...keyboards.mainMenu
+          });
+        } catch (finalError) {
+          console.error("Final fallback failed:", finalError);
+        }
+      }
+    } finally {
+      // Always remove from pending, even if error occurred
+      messageHandler.pendingEdits.delete(callbackKey);
     }
   });
 
   // Helper function to send session expired message
   async function sendSessionExpiredMessage(bot, chatId, messageId) {
-    await bot.editMessageText("❌ Session expired. Please start again.", {
-      chat_id: chatId,
-      message_id: messageId,
+    await messageHandler.safeEditMessage(bot, chatId, messageId,
+      "❌ Session expired. Please start again.", {
       reply_markup: {
         inline_keyboard: [[{ text: "🛍️ Back to Shop", callback_data: "shop" }]],
       },
@@ -503,54 +478,36 @@ module.exports = (bot) => {
   }
 
   // Helper function to handle product search
-  async function handleProductSearch(
-    bot,
-    chatId,
-    messageId,
-    username,
-    filters,
-    userId
-  ) {
+  async function handleProductSearch(bot, chatId, messageId, username, filters, userId) {
     try {
-      await bot.editMessageText("⏳ Searching for products...", {
-        chat_id: chatId,
-        message_id: messageId,
-      });
+      await messageHandler.showLoading(bot, chatId, messageId, "⏳ Searching for products...");
 
       const productsResult = await shopService.getProducts(username, filters);
 
       if (!productsResult.success) {
-        await bot.editMessageText(
-          `❌ **Unable to get products**\n\nError: ${productsResult.error}`,
-          {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: "Markdown",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
-              ],
-            },
-          }
-        );
+        await messageHandler.safeEditMessage(bot, chatId, messageId,
+          `❌ **Unable to get products**\n\nError: ${productsResult.error}`, {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
+            ],
+          },
+        });
         return;
       }
 
       if (productsResult.availableQuantity === 0) {
-        await bot.editMessageText(
-          `📭 **No Products Available**\n\nNo products found with your current filters.`,
-          {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: "Markdown",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "🔄 Try Different Category", callback_data: "shop" }],
-                [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
-              ],
-            },
-          }
-        );
+        await messageHandler.safeEditMessage(bot, chatId, messageId,
+          `📭 **No Products Available**\n\nNo products found with your current filters.`, {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🔄 Try Different Category", callback_data: "shop" }],
+              [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
+            ],
+          },
+        });
         return;
       }
 
@@ -565,20 +522,15 @@ module.exports = (bot) => {
         filters
       );
 
-      await bot.editMessageText(
-        `📦 **Products Found**\n\n**Available Quantity:** ${productsResult.availableQuantity}\n\nPlease type the quantity you want to purchase (1-${productsResult.availableQuantity}):`,
-        {
-          chat_id: chatId,
-          message_id: messageId,
-          parse_mode: "Markdown",
-          ...quantityKeyboard,
-        }
-      );
+      await messageHandler.safeEditMessage(bot, chatId, messageId,
+        `📦 **Products Found**\n\n**Available Quantity:** ${productsResult.availableQuantity}\n\nPlease type the quantity you want to purchase (1-${productsResult.availableQuantity}):`, {
+        parse_mode: "Markdown",
+        ...quantityKeyboard,
+      });
     } catch (error) {
       console.error("Product search error:", error);
-      await bot.editMessageText("❌ Something went wrong. Please try again.", {
-        chat_id: chatId,
-        message_id: messageId,
+      await messageHandler.safeEditMessage(bot, chatId, messageId,
+        "❌ Something went wrong. Please try again.", {
         reply_markup: {
           inline_keyboard: [
             [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
@@ -588,44 +540,25 @@ module.exports = (bot) => {
     }
   }
 
-  // SIMPLIFIED checkout handler - just returns download link
-  async function handleCheckout(
-    bot,
-    chatId,
-    messageId,
-    username,
-    filters,
-    quantity,
-    userId
-  ) {
+  // SIMPLIFIED checkout handler
+  async function handleCheckout(bot, chatId, messageId, username, filters, quantity, userId) {
     try {
-      await bot.editMessageText("⏳ Processing your order...", {
-        chat_id: chatId,
-        message_id: messageId,
-      });
+      await messageHandler.showLoading(bot, chatId, messageId, "⏳ Processing your order...");
 
-      const checkoutResult = await shopService.checkout(
-        username,
-        filters,
-        quantity
-      );
+      const checkoutResult = await shopService.checkout(username, filters, quantity);
 
       if (!checkoutResult.success) {
-        await bot.editMessageText(
-          `❌ **Purchase Failed**\n\nError: ${checkoutResult.error}`,
-          {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: "Markdown",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "💰 Check Wallet", callback_data: "wallet" }],
-                [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
-                [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
-              ],
-            },
-          }
-        );
+        await messageHandler.safeEditMessage(bot, chatId, messageId,
+          `❌ **Purchase Failed**\n\nError: ${checkoutResult.error}`, {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "💰 Check Wallet", callback_data: "wallet" }],
+              [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
+              [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
+            ],
+          },
+        });
         return;
       }
 
@@ -637,12 +570,10 @@ module.exports = (bot) => {
         ? ` (${(checkoutResult.fileSize / 1024).toFixed(2)} KB)`
         : "";
 
-      // Send success message with download link - NO FILE CONVERSION
-      const successMessage = `✅ **Purchase Successful!**\n\n${checkoutResult.message}\n\n📄 **File:** ${checkoutResult.fileName}${fileSizeText}\n\n🔗 **[Click here to download your file](${checkoutResult.downloadUrl})**\n\n💡 *Click the download link above to get your file***\n\n💡 *Enure to copy the content of the text file opened and save in your computer!*`;
+      // Send success message with download link
+      const successMessage = `✅ **Purchase Successful!**\n\n${checkoutResult.message}\n\n📄 **File:** ${checkoutResult.fileName}${fileSizeText}\n\n🔗 **[Click here to download your file](${checkoutResult.downloadUrl})**\n\n💡 *Click the download link above to get your file*\n\n💡 *Ensure to copy the content of the text file opened and save in your computer!*`;
 
-      await bot.editMessageText(successMessage, {
-        chat_id: chatId,
-        message_id: messageId,
+      await messageHandler.safeEditMessage(bot, chatId, messageId, successMessage, {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
@@ -655,34 +586,20 @@ module.exports = (bot) => {
       });
     } catch (error) {
       console.error("Checkout error:", error);
-      await bot.editMessageText(
-        "❌ Something went wrong during checkout. Please try again.",
-        {
-          chat_id: chatId,
-          message_id: messageId,
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
-            ],
-          },
-        }
-      );
+      await messageHandler.safeEditMessage(bot, chatId, messageId,
+        "❌ Something went wrong during checkout. Please try again.", {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
+          ],
+        },
+      });
     }
   }
 
-  async function processDeposit(
-    bot,
-    chatId,
-    messageId,
-    username,
-    amount,
-    cryptoCode
-  ) {
+  async function processDeposit(bot, chatId, messageId, username, amount, cryptoCode) {
     try {
-      await bot.editMessageText("⏳ Creating deposit...", {
-        chat_id: chatId,
-        message_id: messageId,
-      });
+      await messageHandler.showLoading(bot, chatId, messageId, "⏳ Creating deposit...");
 
       const depositResult = await paymentService.createDeposit(
         amount,
@@ -692,15 +609,11 @@ module.exports = (bot) => {
       );
 
       if (!depositResult.success) {
-        await bot.editMessageText(
-          `❌ **Deposit Failed**\n\nError: ${depositResult.error}`,
-          {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: "Markdown",
-            ...keyboards.backToMain,
-          }
-        );
+        await messageHandler.safeEditMessage(bot, chatId, messageId,
+          `❌ **Deposit Failed**\n\nError: ${depositResult.error}`, {
+          parse_mode: "Markdown",
+          ...keyboards.backToMain,
+        });
         return;
       }
 
@@ -713,17 +626,10 @@ module.exports = (bot) => {
         `**Order ID:** ${depositResult.paymentData.order_id}\n` +
         `**Transaction ID:** ${depositResult.transactionId}\n\n` +
         `📍 **Payment Address:**\n\`${depositResult.paymentData.pay_address}\`\n\n` +
-        `💎 **Amount to Send:**\n\`${
-          depositResult.paymentData.pay_amount
-        } ${depositResult.paymentData.pay_currency.toUpperCase()}\`\n\n` +
-        ` ${depositResult.paymentData.pay_currency.toUpperCase()}\n\n` +
-        `⚠️ **Important:**\n• Send exactly **${
-          depositResult.paymentData.pay_amount
-        } ${depositResult.paymentData.pay_currency.toUpperCase()}** to the address above\n• Your deposit will be credited automatically once confirmed\n• Do not send from an exchange, use a personal wallet`;
+        `💎 **Amount to Send:**\n\`${depositResult.paymentData.pay_amount} ${depositResult.paymentData.pay_currency.toUpperCase()}\`\n\n` +
+        `⚠️ **Important:**\n• Send exactly **${depositResult.paymentData.pay_amount} ${depositResult.paymentData.pay_currency.toUpperCase()}** to the address above\n• Your deposit will be credited automatically once confirmed\n• Do not send from an exchange, use a personal wallet`;
 
-      await bot.editMessageText(paymentText, {
-        chat_id: chatId,
-        message_id: messageId,
+      await messageHandler.safeEditMessage(bot, chatId, messageId, paymentText, {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
@@ -734,9 +640,8 @@ module.exports = (bot) => {
       });
     } catch (error) {
       console.error("Process deposit error:", error);
-      await bot.editMessageText("❌ Something went wrong. Please try again.", {
-        chat_id: chatId,
-        message_id: messageId,
+      await messageHandler.safeEditMessage(bot, chatId, messageId,
+        "❌ Something went wrong. Please try again.", {
         ...keyboards.backToMain,
       });
     }

@@ -334,7 +334,7 @@ function createAmountKeyboard(cryptoCode) {
                     { text: '$500', callback_data: `amount_${cryptoCode}_500` }
                 ],
                 [
-                    { text: '💰 Custom Amount', callback_data: 'deposit_custom_with_crypto' },
+                    // { text: '💰 Custom Amount', callback_data: 'deposit_custom_with_crypto' },
                     { text: '⬅️ Back to Crypto', callback_data: 'deposit' }
                 ]
             ]

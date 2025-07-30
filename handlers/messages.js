@@ -1,6 +1,8 @@
-// handlers/messages.js - Fixed version for quantity input
+// handlers/messages.js - Updated with safe message handling and rate limiting
 const keyboards = require('../utils/keyboards');
-const sharedState = require('../utils/sharedState'); // Use the same state system as callbacks
+const messageHandler = require('../utils/messageHandler');
+const rateLimiter = require('../utils/rateLimiter');
+const sharedState = require('../utils/sharedState');
 
 module.exports = (bot) => {
     // Handle all text messages (except commands)  
@@ -21,6 +23,18 @@ module.exports = (bot) => {
         const username = msg.from.username;
         
         console.log(`Message received from user ${userId}: "${text}"`);
+
+        // Rate limiting check
+        if (rateLimiter.isRateLimited(userId, 15, 60000)) { // 15 messages per minute
+            await messageHandler.safeSendMessage(bot, chatId, 
+                "⚠️ Please slow down and try again in a minute");
+            return;
+        }
+
+        // Check for spam/duplicate messages
+        if (rateLimiter.isDuplicateRequest(userId, 'message', 2000)) { // 2 second cooldown
+            return; // Silently ignore rapid duplicate messages
+        }
         
         // Get user state using the same system as callbacks
         const userState = sharedState.getUserState(userId);
@@ -29,11 +43,32 @@ module.exports = (bot) => {
         // Handle quantity input for product purchase
         if (userState && userState.step === 'entering_quantity') {
             console.log('Processing quantity input:', text);
-            
+            await handleQuantityInput(bot, chatId, userId, text, userState);
+            return;
+        }
+        
+        // Handle custom deposit amount input
+        if (userState && userState.step === 'entering_custom_amount') {
+            console.log('Processing custom amount input:', text);
+            await handleCustomAmountInput(bot, chatId, userId, text, username);
+            return;
+        }
+        
+        // Default response - redirect to menu
+        await messageHandler.safeSendMessage(bot, chatId, 
+            'Please use the menu buttons to navigate! 😊\n\nUse /start to get the main menu.', 
+            keyboards.mainMenu
+        );
+    });
+
+    // Handle quantity input
+    async function handleQuantityInput(bot, chatId, userId, text, userState) {
+        try {
             const quantity = parseInt(text);
             
             if (isNaN(quantity) || quantity <= 0) {
-                await bot.sendMessage(chatId, '❌ Please enter a valid number (e.g., 5)', {
+                await messageHandler.safeSendMessage(bot, chatId, 
+                    '❌ Please enter a valid number (e.g., 5)', {
                     reply_markup: {
                         inline_keyboard: [
                             [{ text: '⬅️ Back to Shop', callback_data: 'shop' }]
@@ -44,7 +79,8 @@ module.exports = (bot) => {
             }
 
             if (quantity > userState.availableQuantity) {
-                await bot.sendMessage(chatId, `❌ Only ${userState.availableQuantity} items available. Please enter a smaller number.`, {
+                await messageHandler.safeSendMessage(bot, chatId, 
+                    `❌ Only ${userState.availableQuantity} items available. Please enter a smaller number.`, {
                     reply_markup: {
                         inline_keyboard: [
                             [{ text: '⬅️ Back to Shop', callback_data: 'shop' }]
@@ -69,20 +105,32 @@ module.exports = (bot) => {
                 availableQuantity: userState.availableQuantity
             });
             
-            await bot.sendMessage(chatId, `🛒 **Order Summary**\n\n**Quantity:** ${quantity} items\n**Available:** ${userState.availableQuantity} items\n\nConfirm your purchase?`, {
+            await messageHandler.safeSendMessage(bot, chatId, 
+                `🛒 **Order Summary**\n\n**Quantity:** ${quantity} items\n**Available:** ${userState.availableQuantity} items\n\nConfirm your purchase?`, {
                 parse_mode: 'Markdown',
                 ...checkoutKeyboard
             });
-            return;
+        } catch (error) {
+            console.error('Quantity input error:', error);
+            await messageHandler.safeSendMessage(bot, chatId, 
+                '❌ Something went wrong. Please try again.', {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '⬅️ Back to Shop', callback_data: 'shop' }]
+                    ]
+                }
+            });
         }
-        
-        
-        // Handle custom deposit amount input
-        if (userState && userState.step === 'entering_custom_amount') {
+    }
+
+    // Handle custom deposit amount input
+    async function handleCustomAmountInput(bot, chatId, userId, text, username) {
+        try {
             const amount = parseFloat(text);
             
             if (isNaN(amount) || amount <= 0) {
-                await bot.sendMessage(chatId, '❌ Please enter a valid amount (e.g., 25.50)', {
+                await messageHandler.safeSendMessage(bot, chatId, 
+                    '❌ Please enter a valid amount (e.g., 25.50)', {
                     reply_markup: {
                         inline_keyboard: [
                             [{ text: '⬅️ Back to Deposit', callback_data: 'deposit' }]
@@ -93,7 +141,8 @@ module.exports = (bot) => {
             }
 
             if (amount < 10) {
-                await bot.sendMessage(chatId, '❌ Minimum deposit amount is $10', {
+                await messageHandler.safeSendMessage(bot, chatId, 
+                    '❌ Minimum deposit amount is $10', {
                     reply_markup: {
                         inline_keyboard: [
                             [{ text: '⬅️ Back to Deposit', callback_data: 'deposit' }]
@@ -104,7 +153,8 @@ module.exports = (bot) => {
             }
 
             if (amount > 10000) {
-                await bot.sendMessage(chatId, '❌ Maximum deposit amount is $10,000', {
+                await messageHandler.safeSendMessage(bot, chatId, 
+                    '❌ Maximum deposit amount is $10,000', {
                     reply_markup: {
                         inline_keyboard: [
                             [{ text: '⬅️ Back to Deposit', callback_data: 'deposit' }]
@@ -120,6 +170,10 @@ module.exports = (bot) => {
                 customAmount: amount 
             });
             
+            // Show loading message
+            const loadingMessage = await messageHandler.safeSendMessage(bot, chatId, 
+                '⏳ Loading cryptocurrencies...');
+            
             // Get available cryptocurrencies
             const paymentService = require('../services/paymentService');
             
@@ -127,7 +181,8 @@ module.exports = (bot) => {
                 const currenciesResult = await paymentService.getCurrencies();
                 
                 if (!currenciesResult.success) {
-                    await bot.sendMessage(chatId, `❌ **Unable to load cryptocurrencies**\n\nError: ${currenciesResult.error}`, {
+                    await messageHandler.safeEditMessage(bot, chatId, loadingMessage.message_id,
+                        `❌ **Unable to load cryptocurrencies**\n\nError: ${currenciesResult.error}`, {
                         parse_mode: 'Markdown',
                         reply_markup: {
                             inline_keyboard: [
@@ -138,16 +193,21 @@ module.exports = (bot) => {
                     return;
                 }
 
-                const cryptoKeyboard = keyboards.createCryptoKeyboard(currenciesResult.currencies);
+                const cryptoKeyboard = keyboards.validateAndFixKeyboard(
+                    keyboards.createCryptoKeyboard(currenciesResult.currencies),
+                    'CryptoKeyboard'
+                );
                 
-                await bot.sendMessage(chatId, `💰 **Deposit ${amount}**\n\nSelect cryptocurrency:`, {
+                await messageHandler.safeEditMessage(bot, chatId, loadingMessage.message_id,
+                    `💰 **Deposit $${amount}**\n\nSelect cryptocurrency:`, {
                     parse_mode: 'Markdown',
                     ...cryptoKeyboard
                 });
                 
             } catch (error) {
                 console.error('Custom amount crypto selection error:', error);
-                await bot.sendMessage(chatId, '❌ Something went wrong. Please try again.', {
+                await messageHandler.safeEditMessage(bot, chatId, loadingMessage.message_id,
+                    '❌ Something went wrong. Please try again.', {
                     reply_markup: {
                         inline_keyboard: [
                             [{ text: '⬅️ Back to Deposit', callback_data: 'deposit' }]
@@ -155,13 +215,16 @@ module.exports = (bot) => {
                     }
                 });
             }
-            return;
+        } catch (error) {
+            console.error('Custom amount input error:', error);
+            await messageHandler.safeSendMessage(bot, chatId, 
+                '❌ Something went wrong. Please try again.', {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '⬅️ Back to Deposit', callback_data: 'deposit' }]
+                    ]
+                }
+            });
         }
-        
-        // Default response - redirect to menu
-        await bot.sendMessage(chatId, 
-            'Please use the menu buttons to navigate! 😊\n\nUse /start to get the main menu.', 
-            keyboards.mainMenu
-        );
-    });
+    }
 };
