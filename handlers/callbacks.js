@@ -540,62 +540,71 @@ module.exports = (bot) => {
     }
   }
 
-  // SIMPLIFIED checkout handler
-  async function handleCheckout(bot, chatId, messageId, username, filters, quantity, userId) {
-    try {
-      await messageHandler.showLoading(bot, chatId, messageId, "⏳ Processing your order...");
+// SIMPLIFIED checkout handler - Updated to send separate download link message
+async function handleCheckout(bot, chatId, messageId, username, filters, quantity, userId) {
+  try {
+    await messageHandler.showLoading(bot, chatId, messageId, "⏳ Processing your order...");
 
-      const checkoutResult = await shopService.checkout(username, filters, quantity);
+    const checkoutResult = await shopService.checkout(username, filters, quantity);
 
-      if (!checkoutResult.success) {
-        await messageHandler.safeEditMessage(bot, chatId, messageId,
-          `❌ **Purchase Failed**\n\nError: ${checkoutResult.error}`, {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "💰 Check Wallet", callback_data: "wallet" }],
-              [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
-              [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
-            ],
-          },
-        });
-        return;
-      }
-
-      // Clear user state since we're done
-      sharedState.clearUserState(userId);
-
-      // Format file size for display
-      const fileSizeText = checkoutResult.fileSize
-        ? ` (${(checkoutResult.fileSize / 1024).toFixed(2)} KB)`
-        : "";
-
-      // Send success message with download link
-      const successMessage = `✅ **Purchase Successful!**\n\n${checkoutResult.message}\n\n📄 **File:** ${checkoutResult.fileName}${fileSizeText}\n\n🔗 **[Click here to download your file](${checkoutResult.downloadUrl})**\n\n💡 *Click the download link above to get your file*\n\n💡 *Ensure to copy the content of the text file opened and save in your computer!*`;
-
-      await messageHandler.safeEditMessage(bot, chatId, messageId, successMessage, {
+    if (!checkoutResult.success) {
+      await messageHandler.safeEditMessage(bot, chatId, messageId,
+        `❌ **Purchase Failed**\n\nError: ${checkoutResult.error}`, {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "💰 Check Wallet", callback_data: "wallet" }],
-            [{ text: "🛍️ Shop Again", callback_data: "shop" }],
+            [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
             [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
           ],
         },
-        disable_web_page_preview: true,
       });
-    } catch (error) {
-      console.error("Checkout error:", error);
-      await messageHandler.safeEditMessage(bot, chatId, messageId,
-        "❌ Something went wrong during checkout. Please try again.", {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
-          ],
-        },
-      });
+      return;
     }
+
+    // Clear user state since we're done
+    sharedState.clearUserState(userId);
+
+    // Format file size for display
+    const fileSizeText = checkoutResult.fileSize
+      ? ` (${(checkoutResult.fileSize / 1024).toFixed(2)} KB)`
+      : "";
+
+    // Send success message with menu buttons
+    const successMessage = `✅ **Purchase Successful!**\n\n${checkoutResult.message}\n\n📄 **File:** ${checkoutResult.fileName}${fileSizeText}\n\n💡 *Your download link has been sent below*\n\n💡 *Ensure to copy the content of the text file opened and save in your computer!*`;
+
+    await messageHandler.safeEditMessage(bot, chatId, messageId, successMessage, {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "💰 Check Wallet", callback_data: "wallet" }],
+          [{ text: "🛍️ Shop Again", callback_data: "shop" }],
+          [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
+        ],
+      },
+      disable_web_page_preview: true,
+    });
+
+    // Send separate message with just the download link
+    const downloadMessage = `🔗 **Your Download Link:**\n\n${checkoutResult.downloadUrl}\n\n👆 *Click the link above to download your file*`;
+    
+    await messageHandler.safeSendMessage(bot, chatId, downloadMessage, {
+      parse_mode: "Markdown",
+      disable_web_page_preview: false, // Allow preview for the download link
+    });
+
+  } catch (error) {
+    console.error("Checkout error:", error);
+    await messageHandler.safeEditMessage(bot, chatId, messageId,
+      "❌ Something went wrong during checkout. Please try again.", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
+        ],
+      },
+    });
   }
+}
 
   async function processDeposit(bot, chatId, messageId, username, amount, cryptoCode) {
     try {
