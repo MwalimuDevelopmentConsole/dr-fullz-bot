@@ -41,8 +41,6 @@ module.exports = (bot) => {
           break;
 
         case "help_support":
-          const supportContact = process.env.SUPPORT_CONTACT || "https://t.me/petergach";
-          const channelLink = process.env.CHANNEL_LINK || "https://t.me/channel";
 
           const helpText = `❓ **Help & Support**\n\n🤖 **Welcome to Dr Fullz!**\n\nOur bot provides secure access to high-quality fullz with cryptocurrency payments.\n\n**Quick Start:**\n• Use /wallet to check your balance\n• Use /deposit to add funds\n• Browse 🛍️ Shop for products\n• Get instant downloads after purchase\n\n**Need Help?**\n• Contact our support team\n• Join our channel for updates\n• Check "How It Works" for details`;
 
@@ -541,62 +539,104 @@ module.exports = (bot) => {
   }
 
   // SIMPLIFIED checkout handler
-  async function handleCheckout(bot, chatId, messageId, username, filters, quantity, userId) {
-    try {
-      await messageHandler.showLoading(bot, chatId, messageId, "⏳ Processing your order...");
+async function handleCheckout(bot, chatId, messageId, username, filters, quantity, userId) {
+  try {
+    await messageHandler.showLoading(bot, chatId, messageId, "⏳ Processing your order...");
 
-      const checkoutResult = await shopService.checkout(username, filters, quantity);
+    const checkoutResult = await shopService.checkout(username, filters, quantity);
 
-      if (!checkoutResult.success) {
-        await messageHandler.safeEditMessage(bot, chatId, messageId,
-          `❌ **Purchase Failed**\n\nError: ${checkoutResult.error}`, {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "💰 Check Wallet", callback_data: "wallet" }],
-              [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
-              [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
-            ],
-          },
-        });
-        return;
-      }
-
-      // Clear user state since we're done
-      sharedState.clearUserState(userId);
-
-      // Format file size for display
-      const fileSizeText = checkoutResult.fileSize
-        ? ` (${(checkoutResult.fileSize / 1024).toFixed(2)} KB)`
-        : "";
-
-      // Send success message with download link
-      const successMessage = `✅ **Purchase Successful!**\n\n${checkoutResult.message}\n\n📄 **File:** ${checkoutResult.fileName}${fileSizeText}\n\n🔗 **[Click here to download your file](${checkoutResult.downloadUrl})**\n\n💡 *Click the download link above to get your file*\n\n💡 *Ensure to copy the content of the text file opened and save in your computer!*`;
-
-      await messageHandler.safeEditMessage(bot, chatId, messageId, successMessage, {
+    if (!checkoutResult.success) {
+      await messageHandler.safeEditMessage(bot, chatId, messageId,
+        `❌ **Purchase Failed**\n\nError: ${checkoutResult.error}`, {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [{ text: "💰 Check Wallet", callback_data: "wallet" }],
-            [{ text: "🛍️ Shop Again", callback_data: "shop" }],
+            [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
             [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
           ],
         },
-        disable_web_page_preview: true,
       });
-    } catch (error) {
-      console.error("Checkout error:", error);
-      await messageHandler.safeEditMessage(bot, chatId, messageId,
-        "❌ Something went wrong during checkout. Please try again.", {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
-          ],
-        },
-      });
+      return;
     }
-  }
 
+    // Clear user state since we're done
+    sharedState.clearUserState(userId);
+
+    // Format file size for display
+    const fileSizeText = checkoutResult.fileSize
+      ? ` (${(checkoutResult.fileSize / 1024).toFixed(2)} KB)`
+      : "";
+
+    // Send success message with download link
+    const successMessage = `✅ **Purchase Successful!**\n\n${checkoutResult.message}\n\n📄 **File:** ${checkoutResult.fileName}${fileSizeText}\n\n💡 *Ensure to copy the content of the text file opened and save in your computer!*`;
+
+    await messageHandler.safeEditMessage(bot, chatId, messageId, successMessage, {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "💰 Check Wallet", callback_data: "wallet" }],
+          [{ text: "🛍️ Shop Again", callback_data: "shop" }],
+          [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
+        ],
+      },
+      disable_web_page_preview: true,
+    });
+
+    // Download file from downloadUrl and send to user
+    if (checkoutResult.downloadUrl) {
+      try {
+        console.log(`🔄 Downloading file from: ${checkoutResult.downloadUrl}`);
+        
+        // Use axios to download the file from the downloadUrl
+        const axios = require('axios');
+        const response = await axios.get(checkoutResult.downloadUrl, {
+          responseType: 'arraybuffer',
+          timeout: 10000 // 10 second timeout
+        });
+        
+        if (response.status === 200) {
+          console.log(`📥 File downloaded successfully, size: ${response.data.byteLength} bytes`);
+          
+          // Create a readable stream from the buffer
+          const { Readable } = require('stream');
+          const fileStream = new Readable();
+          fileStream.push(Buffer.from(response.data));
+          fileStream.push(null); // End the stream
+          
+          await bot.sendDocument(chatId, fileStream, {
+            filename: checkoutResult.fileName,
+            contentType: 'text/plain',
+          }, {
+            caption: `📁 ${checkoutResult.fileName}`,
+          });
+          
+          console.log(`📤 File sent successfully to chat ${chatId}`);
+        }
+      } catch (fileError) {
+        console.error("❌ Error downloading and sending file:", fileError.message);
+        // File sending failed, but user still has the download link
+        
+        // Send a notification that file download failed
+        await bot.sendMessage(chatId, 
+          `⚠️ *Could not send file directly, please use the download link above*`, 
+          { parse_mode: "Markdown" }
+        );
+      }
+    }
+
+  } catch (error) {
+    console.error("Checkout error:", error);
+    await messageHandler.safeEditMessage(bot, chatId, messageId,
+      "❌ Something went wrong during checkout. Please try again.", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🛍️ Back to Shop", callback_data: "shop" }],
+        ],
+      },
+    });
+  }
+}
   async function processDeposit(bot, chatId, messageId, username, amount, cryptoCode) {
     try {
       await messageHandler.showLoading(bot, chatId, messageId, "⏳ Creating deposit...");

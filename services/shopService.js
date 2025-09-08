@@ -130,6 +130,7 @@ async function checkout(username, filters, quantity) {
             fileName: filename,
             fileSize: size,
             downloadUrl: downloadUrl,
+            path,
             message: message || `✅ Purchase completed successfully!\n\n📦 Quantity: ${quantity}\n📄 File: ${filename}\n📊 Size: ${(size / 1024).toFixed(2)} KB`,
         };
 
