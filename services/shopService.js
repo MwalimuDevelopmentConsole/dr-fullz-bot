@@ -110,7 +110,7 @@ async function checkout(username, filters, quantity) {
 
         console.log("Checkout response:", checkoutResponse.data);
 
-        const { message, filename, path, size } = checkoutResponse.data;
+        const { message, filename, path, size, } = checkoutResponse.data;
 
         if (!filename || !path) {
             throw new Error("Invalid response: missing filename or path");
@@ -118,7 +118,7 @@ async function checkout(username, filters, quantity) {
 
         // Build the download URL - NO FILE DOWNLOAD
         const baseUrl = API_BASE_URL.replace('/api', '');
-        const downloadUrl = `${baseUrl}/uploads/${filename}`;
+        const downloadUrl = `${path}`;
         
         console.log("File created successfully:");
         console.log("- Filename:", filename);
