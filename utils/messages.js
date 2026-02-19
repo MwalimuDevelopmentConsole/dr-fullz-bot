@@ -1,6 +1,6 @@
 // utils/messages.js
 const welcome = (name) => `
-🎉 Welcome to Dr Fullz, ${name}!
+🎉 Welcome to Fullducks, ${name}!
 
 Your one-stop shop for digital products. Choose an option below to get started:
 
@@ -10,7 +10,7 @@ Your one-stop shop for digital products. Choose an option below to get started:
 `;
 
 const help = `
-🤖 **Dr Fullz Help**
+🤖 **Fullducks Help**
 
 **Commands:**
 /start - Start the bot
@@ -43,9 +43,9 @@ We're experiencing technical difficulties. Please try again in a few moments.
 const profileMessage = (profile) => `
 👤 **Your Profile**
 
-**Name:** ${profile.name || 'Not set'}
-**Username:** @${profile.username || 'Not set'}
-**Balance:** $${profile.balance || '0.00'}
+**Name:** ${profile.name || "Not set"}
+**Username:** @${profile.username || "Not set"}
+**Balance:** $${profile.balance || "0.00"}
 **Total Orders:** ${profile.total_orders || 0}
 **Member Since:** ${new Date(profile.created_at).toLocaleDateString()}
 
@@ -82,7 +82,7 @@ const productDetail = (product) => `
 **Description:**
 ${product.description}
 
-${product.in_stock ? '✅ In Stock' : '❌ Out of Stock'}
+${product.in_stock ? "✅ In Stock" : "❌ Out of Stock"}
 `;
 
 const purchaseSuccess = (order) => `
@@ -148,19 +148,19 @@ Example: "phone 2023" or "laptop gaming"
 `;
 
 module.exports = {
-    welcome,
-    help,
-    authError,
-    apiError,
-    profileMessage,
-    depositSuccess,
-    depositPending,
-    productDetail,
-    purchaseSuccess,
-    purchaseError,
-    noProducts,
-    customDepositPrompt,
-    invalidAmount,
-    insufficientBalance,
-    searchPrompt
+  welcome,
+  help,
+  authError,
+  apiError,
+  profileMessage,
+  depositSuccess,
+  depositPending,
+  productDetail,
+  purchaseSuccess,
+  purchaseError,
+  noProducts,
+  customDepositPrompt,
+  invalidAmount,
+  insufficientBalance,
+  searchPrompt,
 };
